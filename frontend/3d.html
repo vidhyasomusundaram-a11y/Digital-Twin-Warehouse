@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>3D Digital Twin — Rack Viewer</title>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;600;800&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0b0f1a;
+      --panel:   rgba(12, 18, 32, 0.88);
+      --border:  rgba(0, 200, 255, 0.18);
+      --accent:  #00c8ff;
+      --green:   #39ff8f;
+      --yellow:  #ffd23f;
+      --red:     #ff4655;
+      --text:    #c8d8e8;
+      --mono:    'Share Tech Mono', monospace;
+      --sans:    'Exo 2', sans-serif;
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      font-family: var(--sans);
+      color: var(--text);
+    }
+
+    /* ── canvas ── */
+    #canvas-wrap {
+      position: fixed; inset: 0;
+      z-index: 0;
+    }
+
+    /* ── top bar ── */
+    #topbar {
+      position: fixed; top: 0; left: 0; right: 0;
+      height: 52px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 20px;
+      gap: 18px;
+      z-index: 20;
+      backdrop-filter: blur(12px);
+    }
+    #topbar h1 {
+      font-family: var(--mono);
+      font-size: 15px;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    .sep { width: 1px; height: 28px; background: var(--border); }
+    #status {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text);
+      opacity: 0.7;
+    }
+
+    /* ── side panel ── */
+    #panel {
+      position: fixed; top: 52px; left: 0; bottom: 0;
+      width: 220px;
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      padding: 18px 14px;
+      z-index: 20;
+      backdrop-filter: blur(12px);
+      display: flex; flex-direction: column; gap: 18px;
+      overflow-y: auto;
+    }
+
+    .panel-section label {
+      display: block;
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      color: var(--accent);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+
+    /* upload zone */
+    #dropzone {
+      border: 1.5px dashed var(--border);
+      border-radius: 6px;
+      padding: 14px 10px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      font-size: 11px;
+      line-height: 1.6;
+      color: var(--text);
+      opacity: 0.75;
+    }
+    #dropzone:hover, #dropzone.drag-over {
+      border-color: var(--accent);
+      background: rgba(0,200,255,0.05);
+      opacity: 1;
+    }
+    #fileInput { display: none; }
+
+    /* demo button */
+    .btn {
+      display: block; width: 100%;
+      padding: 8px 0;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: transparent;
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn:hover {
+      background: rgba(0,200,255,0.08);
+      border-color: var(--accent);
+    }
+    .btn.active {
+      background: rgba(0,200,255,0.14);
+      border-color: var(--accent);
+    }
+
+    /* legend */
+    .legend-row {
+      display: flex; align-items: center; gap: 8px;
+      font-family: var(--mono); font-size: 11px;
+      margin-bottom: 5px;
+    }
+    .legend-dot {
+      width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
+    }
+
+    /* stats */
+    #stats-list {
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .stat-row {
+      display: flex; justify-content: space-between;
+      font-family: var(--mono); font-size: 11px;
+    }
+    .stat-row span:last-child { color: var(--accent); }
+
+    /* tooltip */
+    #tooltip {
+      position: fixed;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: 12px;
+      pointer-events: none;
+      display: none;
+      z-index: 50;
+      backdrop-filter: blur(8px);
+      line-height: 1.8;
+    }
+    #tooltip .tt-title { color: var(--accent); font-size: 13px; margin-bottom: 4px; }
+
+    /* scan line overlay */
+    body::after {
+      content: '';
+      position: fixed; inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.04) 2px,
+        rgba(0,0,0,0.04) 4px
+      );
+      pointer-events: none;
+      z-index: 100;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Canvas -->
+<div id="canvas-wrap"></div>
+
+<!-- Top bar -->
+<div id="topbar">
+  <h1>◈ DATACENTER DIGITAL TWIN</h1>
+  <div class="sep"></div>
+  <span id="status">READY — LOAD DEMO OR UPLOAD JSON</span>
+</div>
+
+<!-- Side panel -->
+<div id="panel">
+
+  <div class="panel-section">
+    <label>Data Source</label>
+    <div id="dropzone" onclick="document.getElementById('fileInput').click()">
+      📁 Drop JSON here<br>or click to upload
+    </div>
+    <input type="file" id="fileInput" accept=".json">
+  </div>
+
+  <div class="panel-section">
+    <label>Demo</label>
+    <button class="btn" id="demoBtn" onclick="loadDemo()">▶ Load Demo Racks</button>
+  </div>
+
+  <div class="panel-section">
+    <label>Utilization Legend</label>
+    <div class="legend-row"><div class="legend-dot" style="background:#39ff8f"></div> 0% — Idle</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#8bc34a"></div> 1–30% — Low</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ffd23f"></div> 31–70% — Med</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#ff4655"></div> 71–100% — High</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#bf5af2"></div> &gt;100% — Over</div>
+  </div>
+
+  <div class="panel-section">
+    <label>Stats</label>
+    <div id="stats-list">
+      <div class="stat-row"><span>Racks</span><span id="s-racks">—</span></div>
+      <div class="stat-row"><span>Avg Util</span><span id="s-avg">—</span></div>
+      <div class="stat-row"><span>Max Util</span><span id="s-max">—</span></div>
+      <div class="stat-row"><span>Overloaded</span><span id="s-over">—</span></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Hover Tooltip -->
+<div id="tooltip">
+  <div class="tt-title" id="tt-id">—</div>
+  <div id="tt-util">—</div>
+  <div id="tt-extra">—</div>
+</div>
+
+<script>
+/* =========================================================
+   SCENE SETUP
+========================================================= */
+let scene, camera, renderer, controls;
+let rackMeshes = [];     // {mesh, data}  — used for raycasting
+let objects    = [];     // everything added — for safe clearing
+
+const CANVAS_WRAP = document.getElementById('canvas-wrap');
+
+function init() {
+  // Scene
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b0f1a);
+  scene.fog = new THREE.FogExp2(0x0b0f1a, 0.018);
+
+  // Camera
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
+  camera.position.set(10, 12, 14);
+  camera.lookAt(0, 0, 0);
+
+  // Renderer
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  CANVAS_WRAP.appendChild(renderer.domElement);
+
+  // Lights
+  const dir = new THREE.DirectionalLight(0x00c8ff, 0.9);
+  dir.position.set(10, 20, 10);
+  dir.castShadow = true;
+  scene.add(dir);
+
+  const amb = new THREE.AmbientLight(0x162030, 1.2);
+  scene.add(amb);
+
+  const rim = new THREE.PointLight(0x00ff8f, 0.6, 60);
+  rim.position.set(-10, 8, -10);
+  scene.add(rim);
+
+  // Grid
+  const grid = new THREE.GridHelper(40, 40, 0x003344, 0x001a22);
+  scene.add(grid);
+
+  // Controls
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping    = true;
+  controls.dampingFactor    = 0.06;
+  controls.minDistance      = 3;
+  controls.maxDistance      = 80;
+  controls.maxPolarAngle    = Math.PI / 2.05;
+  controls.target.set(0, 1, 0);
+  controls.update();
+
+  // Resize
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // Raycasting for hover
+  renderer.domElement.addEventListener('mousemove', onMouseMove);
+
+  animate();
+}
+
+/* =========================================================
+   RENDER LOOP  — runs forever, objects stay until removed
+========================================================= */
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+/* =========================================================
+   COLOR
+========================================================= */
+function getColor(u) {
+  if (u === 0)    return new THREE.Color(0x39ff8f);
+  if (u <= 30)    return new THREE.Color(0x8bc34a);
+  if (u <= 70)    return new THREE.Color(0xffd23f);
+  if (u <= 100)   return new THREE.Color(0xff4655);
+  return           new THREE.Color(0xbf5af2);
+}
+
+/* =========================================================
+   LABEL SPRITE
+========================================================= */
+function makeLabel(text, color) {
+  const c   = document.createElement('canvas');
+  c.width   = 256;
+  c.height  = 64;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, 256, 64);
+  ctx.fillStyle = color || '#00c8ff';
+  ctx.font = 'bold 18px "Share Tech Mono", monospace';
+  ctx.fillText(text, 8, 42);
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+  const sp  = new THREE.Sprite(mat);
+  sp.scale.set(2.2, 0.55, 1);
+  return sp;
+}
+
+/* =========================================================
+   CLEAR — disposes everything cleanly
+========================================================= */
+function clearObjects() {
+  objects.forEach(obj => {
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) {
+      if (Array.isArray(obj.material)) {
+        obj.material.forEach(m => { if (m.map) m.map.dispose(); m.dispose(); });
+      } else {
+        if (obj.material.map) obj.material.map.dispose();
+        obj.material.dispose();
+      }
+    }
+    scene.remove(obj);
+  });
+  objects    = [];
+  rackMeshes = [];
+}
+
+/* =========================================================
+   RENDER RACKS  — the core function, stable
+========================================================= */
+function render3D(data) {
+  if (!Array.isArray(data) || data.length === 0) {
+    setStatus('⚠ NO VALID RACK DATA');
+    return;
+  }
+
+  clearObjects();
+
+  const cols   = Math.ceil(Math.sqrt(data.length));   // auto grid
+  const gapX   = 1.8;
+  const gapZ   = 1.8;
+  const offX   = -((cols - 1) * gapX) / 2;
+  const offZ   = -((Math.ceil(data.length / cols) - 1) * gapZ) / 2;
+
+  data.forEach((rack, i) => {
+    const util   = typeof rack.utilization === 'number' ? rack.utilization : 0;
+    const height = Math.max(util / 20, 0.3);
+    const col    = getColor(util);
+
+    // Glow base
+    const baseGeo = new THREE.BoxGeometry(0.96, 0.05, 0.96);
+    const baseMat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.4 });
+    const base    = new THREE.Mesh(baseGeo, baseMat);
+    base.position.set(offX + (i % cols) * gapX, 0.025, offZ + Math.floor(i / cols) * gapZ);
+    scene.add(base);
+    objects.push(base);
+
+    // Main rack box
+    const geo = new THREE.BoxGeometry(0.85, height, 0.85);
+    const mat = new THREE.MeshPhongMaterial({
+      color:     col,
+      emissive:  col,
+      emissiveIntensity: 0.18,
+      shininess: 80,
+      transparent: false
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(offX + (i % cols) * gapX, height / 2, offZ + Math.floor(i / cols) * gapZ);
+    mesh.castShadow    = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+    objects.push(mesh);
+    rackMeshes.push({ mesh, data: rack });
+
+    // Label
+    const labelColor = col.getStyle();
+    const sp = makeLabel(rack.rack_id || `R${String(i + 1).padStart(2, '0')}`, labelColor);
+    sp.position.set(mesh.position.x, height + 0.5, mesh.position.z);
+    scene.add(sp);
+    objects.push(sp);
+  });
+
+  updateStats(data);
+  setStatus(`✔ RENDERING ${data.length} RACKS`);
+}
+
+/* =========================================================
+   STATS
+========================================================= */
+function updateStats(data) {
+  const utils = data.map(d => d.utilization ?? 0);
+  const avg   = (utils.reduce((a, b) => a + b, 0) / utils.length).toFixed(1);
+  const max   = Math.max(...utils).toFixed(1);
+  const over  = utils.filter(u => u > 100).length;
+
+  document.getElementById('s-racks').textContent = data.length;
+  document.getElementById('s-avg').textContent   = avg + '%';
+  document.getElementById('s-max').textContent   = max + '%';
+  document.getElementById('s-over').textContent  = over;
+}
+
+/* =========================================================
+   STATUS
+========================================================= */
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+/* =========================================================
+   RAYCASTING — hover tooltip
+========================================================= */
+const raycaster = new THREE.Raycaster();
+const mouse     = new THREE.Vector2();
+const tooltip   = document.getElementById('tooltip');
+
+function onMouseMove(e) {
+  // Offset for the side panel (220px)
+  mouse.x = ((e.clientX - 220) / (window.innerWidth - 220)) * 2 - 1;
+  mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObjects(rackMeshes.map(r => r.mesh));
+
+  if (hits.length > 0) {
+    const hit  = hits[0].object;
+    const info = rackMeshes.find(r => r.mesh === hit);
+    if (info) {
+      const d = info.data;
+      document.getElementById('tt-id').textContent   = d.rack_id || 'Unknown';
+      document.getElementById('tt-util').textContent = `Utilization: ${d.utilization ?? 0}%`;
+      document.getElementById('tt-extra').textContent = d.location ? `Location: ${d.location}` : '';
+      tooltip.style.left    = (e.clientX + 14) + 'px';
+      tooltip.style.top     = (e.clientY - 10) + 'px';
+      tooltip.style.display = 'block';
+    }
+  } else {
+    tooltip.style.display = 'none';
+  }
+}
+
+/* =========================================================
+   DEMO DATA
+========================================================= */
+function loadDemo() {
+  const demo = [
+    { rack_id: 'R-A01', utilization: 0,   location: 'Zone A' },
+    { rack_id: 'R-A02', utilization: 22,  location: 'Zone A' },
+    { rack_id: 'R-A03', utilization: 45,  location: 'Zone A' },
+    { rack_id: 'R-A04', utilization: 68,  location: 'Zone A' },
+    { rack_id: 'R-A05', utilization: 91,  location: 'Zone A' },
+    { rack_id: 'R-B01', utilization: 110, location: 'Zone B' },
+    { rack_id: 'R-B02', utilization: 55,  location: 'Zone B' },
+    { rack_id: 'R-B03', utilization: 78,  location: 'Zone B' },
+    { rack_id: 'R-B04', utilization: 33,  location: 'Zone B' },
+    { rack_id: 'R-B05', utilization: 10,  location: 'Zone B' },
+    { rack_id: 'R-C01', utilization: 85,  location: 'Zone C' },
+    { rack_id: 'R-C02', utilization: 60,  location: 'Zone C' },
+    { rack_id: 'R-C03', utilization: 42,  location: 'Zone C' },
+    { rack_id: 'R-C04', utilization: 99,  location: 'Zone C' },
+    { rack_id: 'R-C05', utilization: 5,   location: 'Zone C' },
+  ];
+  render3D(demo);
+}
+
+/* =========================================================
+   FILE UPLOAD — reads JSON locally, NO backend needed
+========================================================= */
+const fileInput = document.getElementById('fileInput');
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+  setStatus('READING FILE…');
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      let parsed = JSON.parse(e.target.result);
+      // Accept: array OR {data:[...]}
+      if (Array.isArray(parsed))      render3D(parsed);
+      else if (Array.isArray(parsed.data)) render3D(parsed.data);
+      else { setStatus('⚠ JSON MUST BE ARRAY OR {data:[...]}'); }
+    } catch {
+      setStatus('⚠ INVALID JSON FILE');
+    }
+  };
+  reader.onerror = () => setStatus('⚠ FILE READ ERROR');
+  reader.readAsText(file);
+  fileInput.value = ''; // reset so same file can re-trigger
+});
+
+/* =========================================================
+   DRAG & DROP
+========================================================= */
+const dropzone = document.getElementById('dropzone');
+dropzone.addEventListener('dragover',  e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+dropzone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    fileInput.dispatchEvent(new Event('change'));
+  }
+});
+
+/* =========================================================
+   START
+========================================================= */
+init();
+</script>
+</body>
+</html>
