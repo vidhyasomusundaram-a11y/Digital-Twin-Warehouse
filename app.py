@@ -21,19 +21,24 @@ def validate(df):
 
     return errors
 
-# ---------- STATUS ----------
+# ---------- STATUS (HEATMAP COLORS) ----------
 def add_status(df):
     def get_status(row):
-        usage = row['quantity'] / row['capacity']
+        try:
+            usage = row['quantity'] / row['capacity']
+        except:
+            return "#9e9e9e"  # fallback gray
 
         if usage == 0:
-            return "green"
+            return "#4caf50"   # green
+        elif usage <= 0.3:
+            return "#8bc34a"   # light green
         elif usage <= 0.7:
-            return "yellow"
+            return "#ffc107"   # yellow
         elif usage <= 1:
-            return "red"
+            return "#f44336"   # red
         else:
-            return "purple"
+            return "#9c27b0"   # purple (overloaded)
 
     df['status'] = df.apply(get_status, axis=1)
     return df
@@ -42,30 +47,43 @@ def add_status(df):
 def get_insights(df):
     insights = []
 
-    if (df['quantity'] > df['capacity']).any():
-        insights.append("Overloaded racks detected")
+    overloaded_count = (df['quantity'] > df['capacity']).sum()
+    unused_count = (df['quantity'] == 0).sum()
 
-    if (df['quantity'] == 0).any():
-        insights.append("Unused racks available")
+    if overloaded_count > 0:
+        insights.append(f"{overloaded_count} racks overloaded")
+
+    if unused_count > 0:
+        insights.append(f"{unused_count} racks unused")
 
     return insights
 
 # ---------- PROCESS FILE ----------
 def process_file(filepath):
-    if filepath.endswith('.csv'):
-        df = pd.read_csv(filepath)
-    else:
-        df = pd.read_excel(filepath)
+    try:
+        if filepath.endswith('.csv'):
+            df = pd.read_csv(filepath)
+        else:
+            df = pd.read_excel(filepath)
 
-    errors = validate(df)
-    df = add_status(df)
-    insights = get_insights(df)
+        # Ensure required columns exist
+        required_cols = ['rack_id', 'capacity', 'quantity']
+        for col in required_cols:
+            if col not in df.columns:
+                return {"error": f"Missing column: {col}"}
 
-    return {
-        "data": df.to_dict(orient='records'),
-        "errors": errors,
-        "insights": insights
-    }
+        errors = validate(df)
+        df = add_status(df)
+        insights = get_insights(df)
+
+        return {
+            "data": df.to_dict(orient='records'),
+            "errors": errors,
+            "insights": insights
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
 
 # ---------- DEFAULT API ----------
 @app.route('/data')
@@ -76,11 +94,19 @@ def get_data():
 # ---------- UPLOAD API ----------
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    file = request.files['file']
-    filepath = os.path.join(UPLOAD_FOLDER, file.filename)
-    file.save(filepath)
+    try:
+        file = request.files['file']
 
-    return jsonify(process_file(filepath))
+        if file.filename == '':
+            return jsonify({"error": "No file selected"})
+
+        filepath = os.path.join(UPLOAD_FOLDER, file.filename)
+        file.save(filepath)
+
+        return jsonify(process_file(filepath))
+
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 # ---------- RUN ----------
 if __name__ == '__main__':
